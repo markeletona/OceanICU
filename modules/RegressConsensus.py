@@ -21,7 +21,8 @@ _______________________________________________________________________________
 """
 
 from scipy.special import fdtr, stdtr
-from numpy import Inf, var
+from scipy.stats import t as tdist
+from numpy import sign, isnan, Inf, var
 
 def RegressConsensusW(X, Y, Wx=.5, intercept=1):
     """
@@ -61,8 +62,10 @@ def RegressConsensusW(X, Y, Wx=.5, intercept=1):
         Dictionary with regression results:
             slope : slope of regression
             sse : standard error of slope
+            sci95 : +/- value of the 95% confidence interval of slope
             intercept : intercept of regression
             ise : standard error of intercept
+            ici95 : +/- value of the 95% confidence interval of intercept
             r2 : r squared (coefficient of determination)
             r2_adj : adjusted r2
             F : F statistic
@@ -73,11 +76,11 @@ def RegressConsensusW(X, Y, Wx=.5, intercept=1):
             ipvalue : p-value of the intercept
 
     """
-    # Hacky function to avoid needing to load modules to catch nans
-    def is_nan(num):
-        return num != num
-    def sign_(a):
-        return (a > 0) - (a < 0)
+    # # Hacky function to avoid needing to load modules to catch nans
+    # def is_nan(num):
+    #     return num != num
+    # def sign_(a):
+    #     return (a > 0) - (a < 0)
     
     # Check that X, Y are lists, if not try to coerce them:
     X = list(X)
@@ -92,11 +95,7 @@ def RegressConsensusW(X, Y, Wx=.5, intercept=1):
         raise ValueError('X must be a flat list (not have any sublists)')
     if any(isinstance(iy, list) for iy in Y):
         raise ValueError('Y must be a flat list (not have any sublists)')
-    
-    # Check that X,Y have at least two observations:
-    if (len(X)<2) or (len(Y)<2):
-        raise ValueError('X and Y need to have at least 2 observations')
-        
+     
     # Check that X,Y are the same length:
     if not len(X)==len(Y):
         raise ValueError('X and Y need to have equal number of observations')
@@ -114,14 +113,18 @@ def RegressConsensusW(X, Y, Wx=.5, intercept=1):
         
     # Remove any value pairs with NaN in them:
     # (find nans in X,Y and then retain pairs in which BOTH have valid values)
-    X_isnan = [is_nan(i) for i in X]
-    Y_isnan = [is_nan(j) for j in Y]
-    boo = [(not i) and (not j) for i, j in zip(X_isnan, Y_isnan)] 
+    X_isnan = [isnan(i) for i in X]
+    Y_isnan = [isnan(j) for j in Y]
+    boo = [(not i) and (not j) for i, j in zip(X_isnan, Y_isnan)]
     X = [v for (v, b) in zip(X, boo) if b]
     Y = [v for (v, b) in zip(Y, boo) if b]
     
     # Determine the length of vectors
     n = len(X)
+    
+    # Check that X,Y have at least two observations:
+    if n<2:
+        raise ValueError('X and Y need to have at least 2 observations')
     
     # Determine residual degrees of freedom
     # nu = n-k, k is 1 for the slope, we are dealing with one X variable
@@ -154,10 +157,10 @@ def RegressConsensusW(X, Y, Wx=.5, intercept=1):
         if Wx==0:
             b = Sxy / Sx2
         elif Wx==1:
-            b = sign_(R) * Sy2 / Sxy
+            b = sign(R) * Sy2 / Sxy
         else:
             b = ((1 - 2 * Wx) / (2 - 2 * Wx) * (Sxy / Sx2) +
-                 sign_(R) * (((1 - 2 * Wx) * Sxy) ** 2 +
+                 sign(R) * (((1 - 2 * Wx) * Sxy) ** 2 +
                              4 * Wx * Wy * (Sx2 * Sy2)) ** .5 / 
                  (2 * Wy * Sx2))
 
@@ -169,12 +172,12 @@ def RegressConsensusW(X, Y, Wx=.5, intercept=1):
         elif Wx==1:
             b = (n * Sy2 - Sy ** 2) / (n * Sxy - Sx * Sy)
         elif Wx==.5:
-            b = sign_(R) * ((n * Sy2 - sum(Y) ** 2) /
+            b = sign(R) * ((n * Sy2 - sum(Y) ** 2) /
                             (n * Sx2 - Sx ** 2)) ** .5
         else:
             b = (((1 - 2 * Wx) / (2 * Wy)) * (n * Sxy - Sx * Sy) /
                  (n * Sx2 - Sx ** 2) +
-                 (sign_(R) * (((2 * Wx - 1) * (n * Sxy - Sx * Sy)) ** 2 +
+                 (sign(R) * (((2 * Wx - 1) * (n * Sxy - Sx * Sy)) ** 2 +
                               4 * Wx * Wy * (n * Sx2 - Sx ** 2) *
                               (n * Sy2 - Sy**2)) ** .5 /
                   (2 * Wy * (n * Sx2 - Sx ** 2))))
@@ -236,20 +239,26 @@ def RegressConsensusW(X, Y, Wx=.5, intercept=1):
         tb = b/sb
         ta = a/sa
         # p-values:
-        pval_b = 2 * (1 - stdtr(nu, tb)) # pval and pval_b should be the same
-        pval_a = 2 * (1 - stdtr(nu, ta))
+        pval_b = 2 * (1 - stdtr(nu, abs(tb))) # pval and pval_b should be the same
+        pval_a = 2 * (1 - stdtr(nu, abs(ta)))
+        # 95% confidence intervals (the +/- value)
+        ci_b = tdist.ppf((1 - .05 / 2), nu) * sb
+        ci_a = tdist.ppf((1 - .05 / 2), nu) * sa
     else:
         tb = b/sb
         ta = Inf # for intercept==0, a=0, sa=0
-        pval_b = 2 * (1 - stdtr(nu, tb))
-        pval_a = 2 * (1 - stdtr(nu, ta))
-
+        pval_b = 2 * (1 - stdtr(nu, abs(tb)))
+        pval_a = 2 * (1 - stdtr(nu, abs(ta)))
+        ci_b = tdist.ppf((1 - .05 / 2), nu) * sb
+        ci_a = tdist.ppf((1 - .05 / 2), nu) * sa
 
     # Gather results:
     out = {'slope': b,
            'sse': sb,
+           'sci95': ci_b,
            'intercept': a,
            'ise': sa,
+           'ici95': ci_a,
            'r2': r2,
            'r2_adj': r2_adj,
            'F': F,
@@ -299,8 +308,10 @@ def RegressConsensus(X, Y, sX, sY, intercept=1):
         Dictionary with regression results:
             slope : slope of regression
             sse : standard error of slope
+            sci95 : +/- value of the 95% confidence interval of slope
             intercept : intercept of regression
             ise : standard error of intercept
+            ici95 : +/- value of the 95% confidence interval of intercept
             r2 : r squared (coefficient of determination)
             r2_adj : adjusted r2
             F : F statistic
@@ -311,11 +322,11 @@ def RegressConsensus(X, Y, sX, sY, intercept=1):
             ipvalue : p-value of the intercept
 
     """
-    # Hacky function to avoid needing to load modules to catch nans
-    def is_nan(num):
-        return num != num
-    def sign_(a):
-        return (a > 0) - (a < 0)
+    # # Hacky function to avoid needing to load modules to catch nans
+    # def is_nan(num):
+    #     return num != num
+    # def sign_(a):
+    #     return (a > 0) - (a < 0)
     
     # Check that X, Y are lists, if not try to coerce them:
     X = list(X)
@@ -352,8 +363,8 @@ def RegressConsensus(X, Y, sX, sY, intercept=1):
         
     # Remove any value pairs with NaN in them:
     # (find nans in X,Y and then retain pairs in which BOTH have valid values)
-    X_isnan = [is_nan(i) for i in X]
-    Y_isnan = [is_nan(j) for j in Y]
+    X_isnan = [isnan(i) for i in X]
+    Y_isnan = [isnan(j) for j in Y]
     boo = [(not i) and (not j) for i, j in zip(X_isnan, Y_isnan)] 
     X = [v for (v, b) in zip(X, boo) if b]
     Y = [v for (v, b) in zip(Y, boo) if b]
@@ -393,10 +404,10 @@ def RegressConsensus(X, Y, sX, sY, intercept=1):
         if Wx==0:
             b = Sxy / Sx2
         elif Wx==1:
-            b = sign_(R) * Sy2 / Sxy
+            b = sign(R) * Sy2 / Sxy
         else:
             b = ((1 - 2 * Wx) / (2 - 2 * Wx) * (Sxy / Sx2) +
-                 sign_(R) * (((1 - 2 * Wx) * Sxy) ** 2 +
+                 sign(R) * (((1 - 2 * Wx) * Sxy) ** 2 +
                              4 * Wx * Wy * (Sx2 * Sy2)) ** .5 / 
                  (2 * Wy * Sx2))
 
@@ -408,12 +419,12 @@ def RegressConsensus(X, Y, sX, sY, intercept=1):
         elif Wx==1:
             b = (n * Sy2 - Sy ** 2) / (n * Sxy - Sx * Sy)
         elif Wx==.5:
-            b = sign_(R) * ((n * Sy2 - sum(Y) ** 2) /
+            b = sign(R) * ((n * Sy2 - sum(Y) ** 2) /
                             (n * Sx2 - Sx ** 2)) ** .5
         else:
             b = (((1 - 2 * Wx) / (2 * Wy)) * (n * Sxy - Sx * Sy) /
                  (n * Sx2 - Sx ** 2) +
-                 (sign_(R) * (((2 * Wx - 1) * (n * Sxy - Sx * Sy)) ** 2 +
+                 (sign(R) * (((2 * Wx - 1) * (n * Sxy - Sx * Sy)) ** 2 +
                               4 * Wx * Wy * (n * Sx2 - Sx ** 2) *
                               (n * Sy2 - Sy**2)) ** .5 /
                   (2 * Wy * (n * Sx2 - Sx ** 2))))
@@ -477,18 +488,25 @@ def RegressConsensus(X, Y, sX, sY, intercept=1):
         # p-values:
         pval_b = 2 * (1 - stdtr(nu, tb)) # pval and pval_b should be the same
         pval_a = 2 * (1 - stdtr(nu, ta))
+        # 95% confidence intervals (the +/- value)
+        ci_b = tdist.ppf((1 - .05 / 2), nu) * sb
+        ci_a = tdist.ppf((1 - .05 / 2), nu) * sa
     else:
         tb = b/sb
         ta = Inf # for intercept==0, a=0, sa=0
         pval_b = 2 * (1 - stdtr(nu, tb))
         pval_a = 2 * (1 - stdtr(nu, ta))
+        ci_b = tdist.ppf((1 - .05 / 2), nu) * sb
+        ci_a = tdist.ppf((1 - .05 / 2), nu) * sa
 
 
     # Gather results:
     out = {'slope': b,
            'sse': sb,
+           'sci95': ci_b,
            'intercept': a,
            'ise': sa,
+           'ici95': ci_a,
            'r2': r2,
            'r2_adj': r2_adj,
            'F': F,
